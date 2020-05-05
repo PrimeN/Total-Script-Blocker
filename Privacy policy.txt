@@ -1,0 +1,11 @@
+Total Script Blocker does not collect any data of any kind.
+
+Total Script Blocker has no home server.
+
+Total Script Blocker doesn't embed any kind of analytic hooks in its code.
+
+If a donation is made, you will be lead to paypal.
+
+The project is currently hosted on github.com, which is owned by GitHub, Inc., and thus is unrelated to Total Script Blocker.
+
+That it.

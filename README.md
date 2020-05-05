@@ -1,2 +1,2 @@
-# Total-Script-Blocker
+# Total Script Blocker
 Script Blocking Chromium Extension
