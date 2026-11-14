@@ -94,6 +94,7 @@ chrome.storage.onChanged.addListener((changes,area)=>{
   if(area==='local'&&(changes.syncConfig||changes.settings))void send({type:'state'}).then(state=>{
     displaySync(state.sync);
     if(changes.settings){if(!dirty){
+      sites=state.sites || {};
       $('domains').value=state.allowed.join('\n');$('blocked').value=state.blocked.join('\n');$('mode').value=state.mode;
       for(const key of flags)$(key).checked=state[key];
       baseline=JSON.stringify(form());track();
