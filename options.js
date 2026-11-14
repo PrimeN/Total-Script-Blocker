@@ -66,7 +66,7 @@ $('wotSave').addEventListener('click',()=>run(async()=>{
 $('wotClear').addEventListener('click',()=>run(async()=>{await send({type:'wot-config',clear:true});$('wotKey').value='';$('wotUser').value='';$('wotAutomatic').checked=false;$('wotState').textContent='Credentials removed.';}));
 $('reset').addEventListener('click',()=>{if(confirm('Reset all blocking settings and domain rules to the trust-required defaults? WOT credentials are kept. Export your rules first if you want a backup.'))void run(async()=>display(await send({type:'reset-rules'})));});
 window.addEventListener('beforeunload',event=>{if(dirty||temporaryDirty){event.preventDefault();event.returnValue='';}});
-try{display(await send({type:'state'}));}catch(error){notify(error.message,true);}
+
 
 function displaySync(sync){
   if(!sync)return;
@@ -99,3 +99,5 @@ chrome.storage.onChanged.addListener((changes,area)=>{
     }else notify('Saved settings changed elsewhere. Your unsaved edits are kept; saving will replace the saved copy.');}
   }).catch(error=>notify(error.message,true));
 });
+
+try{display(await send({type:'state'}));}catch(error){notify(error.message,true);}finally{document.body.inert=false;}

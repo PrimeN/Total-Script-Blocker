@@ -168,7 +168,7 @@ try {
   assert.ok((await page.evaluate(()=>document.cookie)).includes('tsb-cookie=retained'));
   console.log('PASS explicit origin cleanup retains cookies');
   await options.reload();
-  await options.waitForSelector('#temporarySave');
+  await options.waitForFunction(()=>!document.body.inert && document.querySelector('#temporary').textContent.length>0);
   await options.locator('#temporaryDomains').fill('bulk.test\nsecond.test');
   await options.locator('#temporarySave').click();
   await options.waitForFunction(()=>document.querySelectorAll('.session-tag').length===2);
