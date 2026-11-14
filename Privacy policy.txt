@@ -1,11 +1,12 @@
-Total Script Blocker does not collect any data of any kind.
+Total Script Blocker stores trusted/blocked domains and preferences locally in browser extension storage. Browser-session storage holds temporary permissions, pause state, per-tab discovered hostnames, and cached reputation results. An offscreen document reads previous versions' extension-local settings once during migration. A local legacy snapshot is retained to assist recovery.
 
-Total Script Blocker has no home server.
+Automatic discovery inspects script/frame/object declarations and observes associated network metadata. Only hostnames, resource types, and evidence labels are stored, not URL paths, query strings, request bodies, or credentials. Lists are bounded and cleared per navigation/tab closure; session storage clears when the browser session ends. No discovery history is uploaded to the developer.
 
-Total Script Blocker doesn't embed any kind of analytic hooks in its code.
+WOT scorecard links navigate to the selected domain's scorecard on mywot.com when clicked. Optional inline reputation lookups send the chosen hostname to scorecard.api.mywot.com using the WOT user ID and API key supplied by the user. Automatic lookups are off by default; enabling them queries the first 20 matching listed domains while the popup is open. WOT receives these requests under its own privacy policy and account terms. Credentials remain in trusted extension local storage, are excluded from settings exports, and are never exposed to website content scripts. Reputation results are cached locally for 30 minutes within the browser session.
 
-If a donation is made, you will be lead to paypal.
+The extension has no developer-operated server, analytics, telemetry, or shared API key. Settings may be exported manually as JSON. The user can remove WOT credentials in Options.
 
-The project is currently hosted on github.com, which is owned by GitHub, Inc., and thus is unrelated to Total Script Blocker.
+The popup offers explicit confirmed per-origin deletion of local/session storage, IndexedDB, CacheStorage and website service workers. Cookies are retained. Cleanup is never automatic. Uninstalling removes extension storage and protection.
 
-That it.
+Optional Chrome Sync
+When enabled in Settings, saved domain rules and protection preferences are stored in Chrome Sync and handled by Google under your Chrome sync settings. WOT credentials, temporary grants, pause state and discovered domains are excluded. A pre-sync settings backup remains on the device. Turning sync off on one device does not delete the copy stored in Chrome Sync.
