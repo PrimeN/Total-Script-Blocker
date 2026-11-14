@@ -1,7 +1,7 @@
 import {normalizeSettings} from './rules.js';
 const $=id=>document.getElementById(id);
 const flags=['reload','showBadge','blockScripts','blockInline','blockFrames','blockObjects','blockWorkers'];
-let baseline='',dirty=false,temporaryDirty=false;
+let sites={},baseline='',dirty=false,temporaryDirty=false;
 async function send(message){
   const result=await chrome.runtime.sendMessage(message);
   if(result?.error)throw new Error(result.error);
@@ -10,7 +10,7 @@ async function send(message){
 }
 function notify(text,error=false){$('status').textContent=text;$('status').dataset.error=String(error);}
 function form(){
-  const settings={allowed:$('domains').value.split(/\r?\n/),blocked:$('blocked').value.split(/\r?\n/),mode:$('mode').value};
+  const settings={sites,allowed:$('domains').value.split(/\r?\n/),blocked:$('blocked').value.split(/\r?\n/),mode:$('mode').value};
   for(const key of flags)settings[key]=$(key).checked;
   return settings;
 }
@@ -31,6 +31,7 @@ function displaySession(state){
   $('revoke').disabled=!state.temporary.length;
 }
 function display(state){
+  sites=state.sites || {};
   $('domains').value=state.allowed.join('\n');$('blocked').value=state.blocked.join('\n');$('mode').value=state.mode;
   for(const key of flags)$(key).checked=state[key];
   displaySession(state);

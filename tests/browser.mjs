@@ -195,6 +195,26 @@ try {
   await options.locator('#domains').fill('synced.test');
   assert.equal(await options.locator('#save').isEnabled(),false);
   console.log('PASS bulk temporary editing, Chrome sync storage, incoming updates, unsaved edits and backup restore');
+  await send({type:'pause'});
+  await send({type:'save',settings:{allowed:[],blocked:[],sites:{},mode:'whitelist'}});
+  await page.goto(url);
+  await send({type:'permissions-batch',scope:'website',website:'localhost',tabId:fixtureTab,changes:[{domain:'localhost',mode:'allow'},{domain:'127.0.0.1',mode:'allow'}],reload:false});
+  await page.reload();
+  assert.equal(await page.evaluate(()=>!!window.remoteRan),true);
+  await page.goto(`http://other.test:${server.address().port}/`);
+  await page.reload();
+  assert.equal(await page.evaluate(()=>!!window.remoteRan),false);
+  await send({type:'undo',reload:false});
+  assert.deepEqual((await send({type:'state'})).sites,{});
+  await send({type:'permissions-batch',changes:[{domain:'localhost',mode:'temporary'}],duration:5,reload:false});
+  const timed=await send({type:'state'});assert.ok(timed.expiries.localhost>Date.now());
+  await options.evaluate(async()=>{await chrome.storage.session.set({expiries:{localhost:Date.now()-1000}});});
+  await send({type:'state'});
+  await page.goto(url);await page.reload();
+  assert.equal(await page.evaluate(()=>!!window.inlineRan),false);
+  await send({type:'undo',reload:false});
+  assert.ok(!(await send({type:'state'})).temporary.includes('localhost'));
+  console.log('PASS website-scoped permissions, navigation isolation, timed expiry and undo');
   // Seed extension-origin V2 settings and exercise the real offscreen importer.
   await page.close();
   await options.evaluate(async()=>{

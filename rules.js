@@ -22,7 +22,7 @@ export function isAllowed(host, domains) {
 }
 
 export const DEFAULT_SETTINGS = {
-  allowed:[], blocked:[], reload:true, mode:'whitelist',
+  allowed:[], blocked:[], sites:{}, reload:true, mode:'whitelist',
   blockScripts:true, blockInline:true, blockFrames:true, blockObjects:true, blockWorkers:true, showBadge:true
 };
 export function normalizeSettings(settings = {}) {
@@ -34,6 +34,14 @@ export function normalizeSettings(settings = {}) {
   for (const key of ['reload','blockScripts','blockInline','blockFrames','blockObjects','blockWorkers','showBadge']) {
     if (settings[key] !== undefined && typeof settings[key] !== 'boolean') throw new Error(`Invalid ${key} preference.`);
     result[key] = settings[key] ?? result[key];
+  }
+  if(settings.sites!==undefined){
+    if(!settings.sites || typeof settings.sites!=='object' || Array.isArray(settings.sites) || Object.keys(settings.sites).length>50)throw new Error('At most 50 website policies are supported.');
+    result.sites={};
+    for(const [host,value] of Object.entries(settings.sites)){
+      if(normalizeDomains([host])[0]!==host || !value || typeof value!=='object')throw new Error('Invalid website policy.');
+      result.sites[host]={allowed:normalizeDomains(value.allowed || []),blocked:normalizeDomains(value.blocked || [])};
+    }
   }
   return result;
 }
@@ -82,4 +90,10 @@ export function buildRules(allowed, paused = false, options = {}) {
   if (temporary.length && policy(true)) rules.push(cspRule(16,{requestDomains:temporary},policy(true)));
   if (denied.length && policy(false,true)) rules.push(cspRule(15,{requestDomains:denied,...(temporary.length ? {excludedRequestDomains:temporary} : {})},policy(false,true)));
   return rules;
+}
+
+export function websiteState(state,host){
+  const policy=state.sites?.[host];if(!policy)return state;
+  const overlaps=(a,b)=>a===b || a.endsWith('.'+b) || b.endsWith('.'+a);
+  return {...state,allowed:normalizeDomains([...state.allowed.filter(d=>!policy.blocked.some(b=>overlaps(d,b))),...policy.allowed]),blocked:normalizeDomains([...state.blocked.filter(d=>!policy.allowed.some(a=>overlaps(d,a))),...policy.blocked])};
 }

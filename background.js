@@ -1,5 +1,5 @@
 import {createSync} from './sync.js';
-import {normalizeDomains, normalizeSettings, buildRules, domainPermission} from './rules.js';
+import {normalizeDomains, normalizeSettings, buildRules, domainPermission, websiteState} from './rules.js';
 import {mergeSources, sourceHost, scanDocument} from './discovery.js';
 import {fetchRating} from './reputation.js';
 import {editPermissions} from './permissions.js';
@@ -9,6 +9,7 @@ const sync = createSync(chrome,async settings=>{
   const current=await state();
   const next={...settings,temporary:current.temporary,paused:current.paused};
   await apply(next);
+  await chrome.storage.session.remove('undo');
   await chrome.storage.local.set({settings:normalizeSettings(next)});
 });
 function serialize(task) {
@@ -36,11 +37,13 @@ async function migrate() {
 async function state() {
   const settings = await migrate();
   const {temporary = [], paused = false} = await chrome.storage.session.get(['temporary','paused']);
-  return {...settings,temporary:normalizeDomains(temporary),paused};
+  const {expiries={}}=await chrome.storage.session.get('expiries');
+  return {...settings,temporary:normalizeDomains(temporary).filter(d=>!expiries[d] || expiries[d]>Date.now()),paused,expiries};
 }
 async function publicState(next) {
   const {wotConfig = {}, migrationWarnings = []} = await chrome.storage.local.get(['wotConfig','migrationWarnings']);
-  return {...next,sync:await sync.status(),wot:{configured:!!(wotConfig.apiKey && wotConfig.userId),automatic:!!wotConfig.automatic,userId:wotConfig.userId || ''},migrationWarnings};
+  const {undo=[]}=await chrome.storage.session.get('undo');
+  return {...next,undoCount:undo.length,sync:await sync.status(),wot:{configured:!!(wotConfig.apiKey && wotConfig.userId),automatic:!!wotConfig.automatic,userId:wotConfig.userId || ''},migrationWarnings};
 }
 async function badge(next, tabId) {
   const details = Number.isInteger(tabId) ? {tabId} : {};
@@ -61,7 +64,29 @@ async function badge(next, tabId) {
   await chrome.action.setBadgeBackgroundColor({...details,color:next.paused ? '#6b7280' : '#315b45'});
 }
 async function apply(next) {
-  const addRules = buildRules([...next.allowed,...next.temporary],next.paused,next);
+  const tabs=await chrome.tabs.query({});
+  const scoped=tabs.flatMap(tab=>{try{const host=new URL(tab.url).hostname;return next.sites[host]&&Number.isInteger(tab.id)?[{tab,host}]:[];}catch{return [];}});
+  const addRules=buildRules([...next.allowed,...next.temporary],next.paused,next);
+  if(scoped.length)for(const rule of addRules)rule.condition.excludedTabIds=scoped.map(x=>x.tab.id);
+  let id=1000;
+  for(const {tab,host}of scoped){
+    const effective=websiteState(next,host);
+    for(const rule of buildRules([...effective.allowed,...effective.temporary],effective.paused,effective)){
+      rule.id=id++;rule.condition.tabIds=[tab.id];
+      if(rule.action.type==='modifyHeaders'){
+        const domains=rule.condition.requestDomains;
+        if(domains && !domains.some(d=>host===d || host.endsWith('.'+d)))continue;
+        rule.condition.requestDomains=[host];
+      }else rule.condition.initiatorDomains=[host];
+      addRules.push(rule);
+    }
+    for(const rule of buildRules([...next.allowed,...next.temporary],next.paused,next)){
+      rule.id=id++;rule.condition.tabIds=[tab.id];
+      if(rule.action.type==='modifyHeaders')rule.condition.excludedRequestDomains=[...(rule.condition.excludedRequestDomains || []),host];
+      else rule.condition.excludedInitiatorDomains=[host];
+      addRules.push(rule);
+    }
+  }
   const old = await chrome.declarativeNetRequest.getSessionRules();
   await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:old.map(r=>r.id),addRules});
   await badge(next);
@@ -106,8 +131,27 @@ async function handle(message) {
     await chrome.tabs.reload(message.tabId);
     return publicState(next);
   }
-  if (message.type === 'save') next={...normalizeSettings({...next,...message.settings,...(message.allowed ? {allowed:message.allowed,reload:message.reload} : {})}),temporary:next.temporary,paused:next.paused};
-  else if (message.type === 'permissions-batch') next=editPermissions(next,message.changes);
+  const before=structuredClone(next);
+  if(message.type==='undo'){
+    const {undo=[]}=await chrome.storage.session.get('undo');
+    if(!undo.length)throw new Error('Nothing to undo.');
+    next=undo.pop();
+    next.temporary=next.temporary.filter(d=>!next.expiries?.[d] || next.expiries[d]>Date.now());
+    await chrome.storage.session.set({undo});
+  }
+  else if (message.type === 'save') next={...normalizeSettings({...next,...message.settings,...(message.allowed ? {allowed:message.allowed,reload:message.reload} : {})}),temporary:next.temporary,paused:next.paused,expiries:next.expiries};
+  else if (message.type === 'permissions-batch') {
+    if(message.scope==='website'){
+      const tab=await chrome.tabs.get(message.tabId),url=new URL(tab.url);
+      if(!['http:','https:'].includes(url.protocol)||url.hostname!==message.website)throw new Error('The website changed. Review your edits.');
+      if(message.changes.some(c=>c.mode==='temporary'))throw new Error('Temporary grants use global scope.');
+      const policy=next.sites[url.hostname] || {allowed:[],blocked:[]};
+      const edited=editPermissions({...policy,temporary:[]},message.changes);
+      next.sites={...next.sites,[url.hostname]:{allowed:edited.allowed,blocked:edited.blocked}};
+      if(!edited.allowed.length&&!edited.blocked.length)delete next.sites[url.hostname];
+      next={...next,...normalizeSettings(next)};
+    }else next=editPermissions(next,message.changes);
+  }
   else if (message.type === 'permission') {
     const domains=normalizeDomains(message.domains || [message.domain]);
     if (!domains.length) throw new Error('Choose a valid domain.');
@@ -117,12 +161,22 @@ async function handle(message) {
   else if (message.type === 'revoke-temporary') next.temporary=message.domain ? next.temporary.filter(d=>d!==normalizeDomains([message.domain])[0]) : [];
   else if (message.type === 'reset-rules') next={...normalizeSettings(),temporary:[],paused:false};
   else if (message.type !== 'state') throw new Error('Unknown request.');
+  if(message.duration!==undefined && ![0,5,30,60].includes(message.duration))throw new Error('Invalid grant duration.');
+  next.expiries={...next.expiries};
+  for(const domain of next.temporary)if(!before.temporary.includes(domain) || (message.type==='permissions-batch' && message.changes.some(c=>c.domain===domain&&c.mode==='temporary'))){
+    next.expiries[domain]=message.duration ? Date.now()+message.duration*60000 : 0;
+  }
   await apply(next);
   if (message.type !== 'state') {
+    if(message.type!=='undo'){
+      const {undo=[]}=await chrome.storage.session.get('undo');
+      if(JSON.stringify(before)!==JSON.stringify(next))await chrome.storage.session.set({undo:[...undo,before].slice(-10)});
+    }
     const previous=(await chrome.storage.local.get('settings')).settings;
     await chrome.storage.local.set({settings:normalizeSettings(next)});
     if(JSON.stringify(previous)!==JSON.stringify(normalizeSettings(next)))await sync.changed();
-    await chrome.storage.session.set({temporary:next.temporary,paused:next.paused});
+    await chrome.storage.session.set({temporary:next.temporary,paused:next.paused,expiries:next.expiries});
+    await scheduleExpiry(next);
     if ((typeof message.reload === 'boolean' ? message.reload : next.reload) && Number.isInteger(message.tabId)) await chrome.tabs.reload(message.tabId);
   }
   return publicState(next);
@@ -186,6 +240,7 @@ async function initialize() {
   await chrome.storage.sync.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
   await apply(await state());
   await sync.reconcile();
+  await scheduleExpiry(await state());
 }
 chrome.runtime.onInstalled.addListener(()=>serialize(initialize).catch(reportError));
 chrome.runtime.onStartup.addListener(()=>serialize(initialize).catch(reportError));
@@ -196,3 +251,13 @@ chrome.storage.onChanged.addListener((changes,area)=>{
 chrome.alarms.onAlarm.addListener(alarm=>{
   if(alarm.name===sync.alarm)serialize(()=>sync.reconcile()).catch(reportError);
 });
+
+async function scheduleExpiry(next){
+  const times=next.temporary.map(d=>next.expiries?.[d]).filter(t=>t>Date.now());
+  if(times.length)await chrome.alarms.create('grant-expiry',{when:Math.min(...times)});
+  else await chrome.alarms.clear('grant-expiry');
+}
+chrome.alarms.onAlarm.addListener(alarm=>{
+  if(alarm.name==='grant-expiry')serialize(async()=>{const next=await state();await apply(next);await chrome.storage.session.set({temporary:next.temporary});await scheduleExpiry(next);}).catch(reportError);
+});
+chrome.tabs.onUpdated.addListener((id,change)=>{if(change.url)serialize(async()=>apply(await state())).catch(reportError);});

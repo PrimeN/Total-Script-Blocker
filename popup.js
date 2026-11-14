@@ -1,4 +1,4 @@
-import {domainPermission,normalizeDomains} from './rules.js';
+import {domainPermission,normalizeDomains,websiteState} from './rules.js';
 import {explicitPermission} from './permissions.js';
 import {scorecardURL} from './reputation.js';
 const $=id=>document.getElementById(id);
@@ -15,7 +15,8 @@ async function send(message){
   return result.data;
 }
 function showState(state){
-  current=state;
+  current=$('scope').value==='website'?websiteState(state,host):state;
+  $('undo').disabled=!state.undoCount;
   $('pause').textContent=state.paused?'Resume':'Pause';
   $('pause').setAttribute('aria-label',state.paused?'Resume protection':'Pause protection for this browser session');
   $('protection').textContent=state.paused?'Protection paused':'Protection on';
@@ -127,7 +128,7 @@ async function run(message){
 $('apply').addEventListener('click',async()=>{
   if(applying||!drafts.size)return;applying=true;updateControls();
   try{
-    showState(await send({type:'permissions-batch',changes:[...drafts].map(([domain,mode])=>({domain,mode})),reload:$('reloadToggle').checked}));
+    showState(await send({type:'permissions-batch',scope:$('scope').value,website:host,duration:Number($('duration').value),changes:[...drafts].map(([domain,mode])=>({domain,mode})),reload:$('reloadToggle').checked}));
     drafts.clear();notify('Saved. Other open tabs may need a reload.');
   }catch(error){notify(error.message,true);}
   finally{applying=false;await refresh(true);}
@@ -145,5 +146,7 @@ $('revoke').addEventListener('click',()=>run({type:'revoke-temporary'}));
 $('options').addEventListener('click',()=>chrome.runtime.openOptionsPage());
 $('refresh').addEventListener('click',()=>refresh(true));
 $('clear').addEventListener('click',()=>{if(confirm(`Clear local/session storage, IndexedDB, cached app data and service workers for ${host}? Cookies are retained. This cannot be undone.`))void run({type:'clear-site-data'});});
+$('undo').addEventListener('click',()=>run({type:'undo'}));
+$('scope').addEventListener('change',()=>{drafts.clear();void refresh(true);});
 try{[tab]=await chrome.tabs.query({active:true,currentWindow:true});await refresh(true);}catch(error){notify(error.message,true);}
 setInterval(()=>void refresh(),2000);

@@ -9,7 +9,7 @@ global.chrome = {
  runtime:{id:'test',getURL:p=>'chrome-extension://test/'+p,getContexts:async()=>[],sendMessage:async()=>{imports++;return {whitelist:['example.com'],reload:false}},onMessage:{addListener:fn=>listener=fn},onInstalled:{addListener(){}},onStartup:{addListener(){}}},
  offscreen:{createDocument:async()=>{},closeDocument:async()=>{}},
  declarativeNetRequest:{getSessionRules:async()=>activeRules,updateSessionRules:async({addRules})=>{activeRules=structuredClone(addRules)}},
- action:{setIcon:async()=>{},setTitle:async()=>{},setBadgeText:async()=>{},setBadgeBackgroundColor:async()=>{}},tabs:{query:async()=>[],get:async()=>({url:'https://example.com/path'}),reload:async()=>{},onRemoved:{addListener(){}},onActivated:{addListener(){}}},webRequest:{onBeforeRequest:{addListener(){}},onCompleted:{addListener(){}},onErrorOccurred:{addListener(){}}},webNavigation:{getFrame:async()=>({documentId:'current'}),onBeforeNavigate:{addListener(){}}},scripting:{executeScript:async()=>[]},browsingData:{remove:async()=>{}}
+ action:{setIcon:async()=>{},setTitle:async()=>{},setBadgeText:async()=>{},setBadgeBackgroundColor:async()=>{}},tabs:{onUpdated:{addListener(){}},query:async()=>[],get:async()=>({url:'https://example.com/path'}),reload:async()=>{},onRemoved:{addListener(){}},onActivated:{addListener(){}}},webRequest:{onBeforeRequest:{addListener(){}},onCompleted:{addListener(){}},onErrorOccurred:{addListener(){}}},webNavigation:{getFrame:async()=>({documentId:'current'}),onBeforeNavigate:{addListener(){}}},scripting:{executeScript:async()=>[]},browsingData:{remove:async()=>{}}
 };
 await import('../background.js');
 const request = msg => new Promise(resolve => listener(msg,{id:'test',url:'chrome-extension://test/options.html'},resolve));
@@ -92,4 +92,17 @@ test('bulk temporary editing validates atomically and keeps permanent rules',asy
  const before=structuredClone(activeRules);
  const bad=await request({type:'save-temporary',domains:['invalid.test/path']});
  assert.ok(bad.error);assert.deepEqual(activeRules,before);assert.deepEqual(session.temporary,['another.test','bulk.test']);
+});
+test('timed grants expire and undo cannot resurrect expired trust',async()=>{
+ await request({type:'permission',domain:'clock.test',mode:'temporary',duration:5});
+ assert.ok(session.expiries['clock.test']>Date.now());
+ session.expiries['clock.test']=Date.now()-1;
+ const result=await request({type:'state'});assert.ok(!result.data.temporary.includes('clock.test'));
+ await request({type:'undo'});assert.ok(!session.temporary.includes('clock.test'));
+});
+test('website edits are validated and undo restores their previous policy',async()=>{
+ await request({type:'permissions-batch',scope:'website',website:'example.com',tabId:1,changes:[{domain:'cdn.test',mode:'allow'}]});
+ assert.deepEqual(local.settings.sites['example.com'].allowed,['cdn.test']);
+ await request({type:'undo'});assert.deepEqual(local.settings.sites,{});
+ const result=await request({type:'permissions-batch',scope:'website',website:'wrong.test',tabId:1,changes:[]});assert.ok(result.error);
 });
