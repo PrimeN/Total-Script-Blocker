@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm,mkdir} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-const extension = path.resolve(new URL('..', import.meta.url).pathname);
+const extension = path.resolve(process.env.TSB_EXTENSION_DIR || new URL('..', import.meta.url).pathname);
 const executablePath = process.env.CHROMIUM_PATH || undefined;
 await mkdir('test-results',{recursive:true});
 const profile = await mkdtemp(path.join(os.tmpdir(),'tsb-test-'));
@@ -214,6 +214,15 @@ try {
   assert.equal(await page.evaluate(()=>!!window.inlineRan),false);
   await send({type:'undo',reload:false});
   assert.ok(!(await send({type:'state'})).temporary.includes('localhost'));
+  await send({type:'save',settings:{sites:{'editor.test':{allowed:['cdn.test'],blocked:[]}}}});
+  await options.reload();await options.waitForFunction(()=>!document.body.inert);
+  await options.getByText('editor.test',{exact:true}).click();
+  await options.getByLabel('editor.test allowed',{exact:true}).fill('edited.test');
+  await options.locator('#save').click();await options.waitForFunction(()=>document.querySelector('#save').disabled);
+  assert.deepEqual((await send({type:'state'})).sites['editor.test'].allowed,['edited.test']);
+  await options.getByRole('button',{name:'Delete editor.test',exact:true}).click();
+  await options.locator('#save').click();await options.waitForFunction(()=>document.querySelector('#save').disabled);
+  assert.deepEqual((await send({type:'state'})).sites,{});
   console.log('PASS website-scoped permissions, navigation isolation, timed expiry and undo');
   // Seed extension-origin V2 settings and exercise the real offscreen importer.
   await page.close();

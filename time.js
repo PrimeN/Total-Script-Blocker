@@ -1,0 +1,1 @@
+export function grantTime(expiry,now=Date.now()){return expiry ? (expiry<=now?'Expired':Math.ceil((expiry-now)/60000)+' min remaining · expires '+new Date(expiry).toLocaleTimeString()) : 'Browser session';}

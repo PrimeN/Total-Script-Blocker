@@ -17,10 +17,20 @@ jobs:
       - run: npm test
       - run: npm install --no-save --package-lock=false playwright
       - run: npx playwright install --with-deps chromium
+      - run: python3 scripts/package.py
       - run: node tests/browser.mjs
+        env:
+          TSB_EXTENSION_DIR: dist/unpacked
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: extension-ui-${{ github.event_name }}
           path: test-results/
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: total-script-blocker-beta
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error

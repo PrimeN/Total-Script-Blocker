@@ -1,3 +1,4 @@
+import {grantTime} from './time.js';
 import {domainPermission,normalizeDomains,websiteState} from './rules.js';
 import {explicitPermission} from './permissions.js';
 import {scorecardURL} from './reputation.js';
@@ -15,14 +16,14 @@ async function send(message){
   return result.data;
 }
 function showState(state){
-  current=$('scope').value==='website'?websiteState(state,host):state;
+  current=websiteState(state,host);
   $('undo').disabled=!state.undoCount;
   $('pause').textContent=state.paused?'Resume':'Pause';
   $('pause').setAttribute('aria-label',state.paused?'Resume protection':'Pause protection for this browser session');
   $('protection').textContent=state.paused?'Protection paused':'Protection on';
   $('protection').className='pill '+(state.paused?'paused':'allowed');
   const mode={whitelist:'Trust required','same-origin':'Same-origin policy',blacklist:'Blocklist policy'}[state.mode];
-  $('summary').textContent=state.paused?'Paused across tabs until you resume or this browser session ends.':`${mode} · Across tabs`;
+  $('summary').textContent=state.paused?'Paused across tabs until you resume or this browser session ends.':`${mode} · ${state.sites?.[host]?'Website overrides active':'Global rules'}`;
   if(!initialized){$('reloadToggle').checked=state.reload;initialized=true;}
 }
 async function refresh(force=false){
@@ -97,7 +98,7 @@ function render(force=false){
     const details=document.createElement('details');details.dataset.domain=source.domain;details.open=opened.has(source.domain);
     const summary=document.createElement('summary');summary.textContent=drafts.has(source.domain)?'Pending change · details':'Details & reputation';details.append(summary);
     const detailBody=document.createElement('div');
-    const evidence=document.createElement('p');evidence.className='hint';evidence.textContent=`${source.types.join(', ')} · ${source.evidence.map(e=>({page:'declared in page',request:'request observed',completed:'response completed','browser-blocked':'browser blocked','csp-blocked':'CSP blocked'})[e]).join(', ')}`;detailBody.append(evidence);
+    const evidence=document.createElement('p');evidence.className='hint';evidence.textContent=`${current.expiries?.[source.domain]?grantTime(current.expiries[source.domain])+' · ':''}${source.types.join(', ')} · ${source.evidence.map(e=>({page:'declared in page',request:'request observed',completed:'response completed','browser-blocked':'browser blocked','csp-blocked':'CSP blocked'})[e]).join(', ')}`;detailBody.append(evidence);
     const actions=document.createElement('div');actions.className='actions';
     if(canManage){
       const link=document.createElement('a');link.textContent='WOT scorecard';link.href=scorecardURL(source.domain);link.target='_blank';link.rel='noopener noreferrer';actions.append(link);

@@ -1,3 +1,4 @@
+import {grantTime} from './time.js';
 import {normalizeSettings} from './rules.js';
 const $=id=>document.getElementById(id);
 const flags=['reload','showBadge','blockScripts','blockInline','blockFrames','blockObjects','blockWorkers'];
@@ -24,7 +25,10 @@ function displaySession(state){
   $('temporary').replaceChildren();
   if(!state.temporary.length)$('temporary').textContent='No temporary grants.';
   for(const domain of state.temporary){
-    const tag=document.createElement('span');tag.className='session-tag';tag.append(document.createTextNode(domain));
+    const tag=document.createElement('span');tag.className='session-tag';tag.append(document.createTextNode(domain+' · '+grantTime(state.expiries?.[domain])));
+    const duration=document.createElement('select');duration.setAttribute('aria-label','Extend grant for '+domain);
+    for(const [value,label]of [[5,'5 minutes'],[30,'30 minutes'],[60,'1 hour'],[0,'Browser session']]){const o=document.createElement('option');o.value=value;o.textContent=label;duration.append(o);}
+    const extend=document.createElement('button');extend.textContent='Extend';extend.addEventListener('click',()=>run(async()=>displaySession(await send({type:'extend-temporary',domain,duration:Number(duration.value)}))));tag.append(duration,extend);
     const remove=document.createElement('button');remove.textContent='×';remove.setAttribute('aria-label',`Revoke session grant for ${domain}`);
     remove.addEventListener('click',()=>run(async()=>displaySession(await send({type:'revoke-temporary',domain}))));tag.append(remove);$('temporary').append(tag);
   }
@@ -32,6 +36,7 @@ function displaySession(state){
 }
 function display(state){
   sites=state.sites || {};
+  displaySites();
   $('domains').value=state.allowed.join('\n');$('blocked').value=state.blocked.join('\n');$('mode').value=state.mode;
   for(const key of flags)$(key).checked=state[key];
   displaySession(state);
@@ -95,6 +100,7 @@ chrome.storage.onChanged.addListener((changes,area)=>{
     displaySync(state.sync);
     if(changes.settings){if(!dirty){
       sites=state.sites || {};
+      displaySites();
       $('domains').value=state.allowed.join('\n');$('blocked').value=state.blocked.join('\n');$('mode').value=state.mode;
       for(const key of flags)$(key).checked=state[key];
       baseline=JSON.stringify(form());track();
@@ -103,3 +109,18 @@ chrome.storage.onChanged.addListener((changes,area)=>{
 });
 
 try{display(await send({type:'state'}));}catch(error){notify(error.message,true);}finally{document.body.inert=false;}
+
+function displaySites(){
+ const container=$('sitePolicies');container.replaceChildren();
+ if(!Object.keys(sites).length)container.textContent='No website overrides saved.';
+ for(const [host,policy]of Object.entries(sites)){
+  const card=document.createElement('details');const title=document.createElement('summary');title.textContent=host;card.append(title);
+  for(const key of ['allowed','blocked']){
+   const label=document.createElement('label');label.className='field';label.textContent=key==='allowed'?'Trusted domains':'Blocked domains';
+   const input=document.createElement('textarea');input.value=policy[key].join('\n');input.setAttribute('aria-label',host+' '+key);
+   input.addEventListener('input',()=>{sites[host][key]=input.value.split(/\r?\n/);track();});label.append(input);card.append(label);
+  }
+  const remove=document.createElement('button');remove.textContent='Delete '+host;remove.addEventListener('click',()=>{delete sites[host];displaySites();track();});card.append(remove);container.append(card);
+ }
+}
+setInterval(()=>void send({type:'state'}).then(displaySession).catch(()=>{}),15000);

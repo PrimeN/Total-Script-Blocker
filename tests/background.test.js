@@ -106,3 +106,14 @@ test('website edits are validated and undo restores their previous policy',async
  await request({type:'undo'});assert.deepEqual(local.settings.sites,{});
  const result=await request({type:'permissions-batch',scope:'website',website:'wrong.test',tabId:1,changes:[]});assert.ok(result.error);
 });
+test('failed undo retains history and extending grants preserves the selected deadline',async()=>{
+ await request({type:'permission',domain:'extend.test',mode:'temporary',duration:5});
+ await request({type:'extend-temporary',domain:'extend.test',duration:60});
+ assert.ok(session.expiries['extend.test']>Date.now()+59*60000);
+ const history=structuredClone(session.undo);
+ const update=chrome.declarativeNetRequest.updateSessionRules;
+ chrome.declarativeNetRequest.updateSessionRules=async()=>{throw new Error('enforcement failed');};
+ const failed=await request({type:'undo'});assert.ok(failed.error);assert.deepEqual(session.undo,history);
+ chrome.declarativeNetRequest.updateSessionRules=update;
+ await request({type:'undo'});assert.ok(session.expiries['extend.test']<Date.now()+6*60000);
+});

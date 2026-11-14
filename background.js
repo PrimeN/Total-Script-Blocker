@@ -46,6 +46,7 @@ async function publicState(next) {
   return {...next,undoCount:undo.length,sync:await sync.status(),wot:{configured:!!(wotConfig.apiKey && wotConfig.userId),automatic:!!wotConfig.automatic,userId:wotConfig.userId || ''},migrationWarnings};
 }
 async function badge(next, tabId) {
+  if(Number.isInteger(tabId)){try{next=websiteState(next,new URL((await chrome.tabs.get(tabId)).url).hostname);}catch{}}
   const details = Number.isInteger(tabId) ? {tabId} : {};
   let text = next.paused ? 'OFF' : 'ON';
   if (Number.isInteger(tabId) && !next.paused) {
@@ -132,12 +133,14 @@ async function handle(message) {
     return publicState(next);
   }
   const before=structuredClone(next);
+  let undoAfter;
   if(message.type==='undo'){
     const {undo=[]}=await chrome.storage.session.get('undo');
     if(!undo.length)throw new Error('Nothing to undo.');
-    next=undo.pop();
+    next=structuredClone(undo.at(-1));
+    undoAfter=undo.slice(0,-1);
     next.temporary=next.temporary.filter(d=>!next.expiries?.[d] || next.expiries[d]>Date.now());
-    await chrome.storage.session.set({undo});
+
   }
   else if (message.type === 'save') next={...normalizeSettings({...next,...message.settings,...(message.allowed ? {allowed:message.allowed,reload:message.reload} : {})}),temporary:next.temporary,paused:next.paused,expiries:next.expiries};
   else if (message.type === 'permissions-batch') {
@@ -156,6 +159,10 @@ async function handle(message) {
     const domains=normalizeDomains(message.domains || [message.domain]);
     if (!domains.length) throw new Error('Choose a valid domain.');
     next=editPermissions(next,domains.map(domain=>({domain,mode:message.mode})));
+  } else if(message.type==='extend-temporary'){
+    const [domain]=normalizeDomains([message.domain]);
+    if(!next.temporary.includes(domain))throw new Error('This grant has expired or was revoked.');
+    next.expiries={...next.expiries,[domain]:message.duration ? Date.now()+message.duration*60000 : 0};
   } else if (message.type === 'pause') next.paused=!next.paused;
   else if (message.type === 'save-temporary') next.temporary=normalizeDomains(message.domains);
   else if (message.type === 'revoke-temporary') next.temporary=message.domain ? next.temporary.filter(d=>d!==normalizeDomains([message.domain])[0]) : [];
@@ -163,7 +170,7 @@ async function handle(message) {
   else if (message.type !== 'state') throw new Error('Unknown request.');
   if(message.duration!==undefined && ![0,5,30,60].includes(message.duration))throw new Error('Invalid grant duration.');
   next.expiries={...next.expiries};
-  for(const domain of next.temporary)if(!before.temporary.includes(domain) || (message.type==='permissions-batch' && message.changes.some(c=>c.domain===domain&&c.mode==='temporary'))){
+  for(const domain of next.temporary)if(message.type!=='undo' && (!before.temporary.includes(domain) || (message.type==='permissions-batch' && message.changes.some(c=>c.domain===domain&&c.mode==='temporary')))){
     next.expiries[domain]=message.duration ? Date.now()+message.duration*60000 : 0;
   }
   await apply(next);
@@ -176,6 +183,7 @@ async function handle(message) {
     await chrome.storage.local.set({settings:normalizeSettings(next)});
     if(JSON.stringify(previous)!==JSON.stringify(normalizeSettings(next)))await sync.changed();
     await chrome.storage.session.set({temporary:next.temporary,paused:next.paused,expiries:next.expiries});
+    if(undoAfter)await chrome.storage.session.set({undo:undoAfter});
     await scheduleExpiry(next);
     if ((typeof message.reload === 'boolean' ? message.reload : next.reload) && Number.isInteger(message.tabId)) await chrome.tabs.reload(message.tabId);
   }
