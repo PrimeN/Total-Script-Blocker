@@ -193,8 +193,7 @@ try {
   assert.deepEqual((await send({type:'state'})).allowed,['synced.test']);
   assert.equal((await send({type:'state'})).sync.enabled,false);
   await options.locator('#domains').fill('synced.test');
-  await options.locator('#save').click();
-  await options.waitForFunction(()=>document.querySelector('#save').disabled);
+  assert.equal(await options.locator('#save').isEnabled(),false);
   console.log('PASS bulk temporary editing, Chrome sync storage, incoming updates, unsaved edits and backup restore');
   // Seed extension-origin V2 settings and exercise the real offscreen importer.
   await page.close();
