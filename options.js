@@ -111,10 +111,10 @@ chrome.storage.onChanged.addListener((changes,area)=>{
 try{display(await send({type:'state'}));}catch(error){notify(error.message,true);}finally{document.body.inert=false;}
 
 function displaySites(){
- const container=$('sitePolicies');container.replaceChildren();
+ const container=$('sitePolicies');const opened=new Set([...container.querySelectorAll('details[open]')].map(el=>el.dataset.host));container.replaceChildren();
  if(!Object.keys(sites).length)container.textContent='No website overrides saved.';
  for(const [host,policy]of Object.entries(sites)){
-  const card=document.createElement('details');const title=document.createElement('summary');title.textContent=host;card.append(title);
+  const card=document.createElement('details');card.dataset.host=host;card.open=opened.has(host);const title=document.createElement('summary');title.textContent=host;card.append(title);
   for(const key of ['allowed','blocked']){
    const label=document.createElement('label');label.className='field';label.textContent=key==='allowed'?'Trusted domains':'Blocked domains';
    const input=document.createElement('textarea');input.value=policy[key].join('\n');input.setAttribute('aria-label',host+' '+key);
