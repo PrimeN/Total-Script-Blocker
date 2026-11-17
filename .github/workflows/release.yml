@@ -1,0 +1,61 @@
+name: Build and release extension
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extension-production-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.ref_name == 'master' || github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node for extensions with unit checks
+        if: hashFiles('package.json') != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Check extension behaviour
+        if: hashFiles('package.json') != ''
+        run: npm test
+      - name: Check release packaging
+        run: python3 -m unittest discover -s tests -p 'test_release_packaging.py' -v
+      - name: Package the extension
+        id: package
+        run: python3 scripts/package-release.py
+      - name: Save downloadable package
+        uses: actions/upload-artifact@v4
+        with:
+          name: total-script-blocker-${{ steps.package.outputs.version }}-${{ github.run_number }}
+          path: |
+            dist/total-script-blocker-${{ steps.package.outputs.version }}.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+    outputs:
+      artifact: total-script-blocker-${{ steps.package.outputs.version }}-${{ github.run_number }}
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build.outputs.artifact }}
+          path: dist
+      - name: Publish numbered release and latest build
+        run: python3 .github/scripts/publish-release.py
+        env:
+          GH_TOKEN: ${{ github.token }}
