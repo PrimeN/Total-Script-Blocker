@@ -13,6 +13,7 @@
 
 <p align="center">
   <a href="https://github.com/PrimeN/Total-Script-Blocker/actions/workflows/test.yml"><img src="https://github.com/PrimeN/Total-Script-Blocker/actions/workflows/test.yml/badge.svg" alt="Extension checks"></a>
+  <a href="https://github.com/PrimeN/Total-Script-Blocker/releases/latest"><img src="https://img.shields.io/github/v/release/PrimeN/Total-Script-Blocker?color=13765b" alt="Latest release"></a>
   <img src="https://img.shields.io/badge/Manifest-V3-13765b" alt="Manifest V3">
   <img src="https://img.shields.io/badge/Chrome-120%2B-13765b?logo=googlechrome&amp;logoColor=white" alt="Chrome 120 or newer">
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-GPLv3-13765b" alt="GNU GPL v3"></a>
@@ -25,6 +26,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/PrimeN/Total-Script-Blocker/releases/latest">Download</a> ·
   <a href="#features">Features</a> ·
   <a href="#screenshots">Screenshots</a> ·
   <a href="#install">Install</a> ·
@@ -81,18 +83,17 @@ have separate account and access requirements.
 Requires **Chrome 120+**, or a Chromium browser supporting the Manifest V3 APIs
 used by the extension. Browser API and Chrome Sync support can vary.
 
-1. Download the repository using **Code → Download ZIP**, or clone it:
-
-   ```sh
-   git clone https://github.com/PrimeN/Total-Script-Blocker.git
-   ```
-
-2. Extract the ZIP if needed. Keep the extension folder in a permanent location;
+1. Download the extension ZIP from the [latest release](https://github.com/PrimeN/Total-Script-Blocker/releases/latest).
+2. Extract the ZIP. Keep the extension folder in a permanent location;
    it must contain `manifest.json`.
 3. Open **`chrome://extensions`** and enable **Developer mode**.
 4. Select **Load unpacked** and choose that folder.
 5. Pin **Total Script Blocker** to the toolbar for quick access.
 6. Reload websites you already had open so document policies take effect.
+
+To install from source instead, use **Code → Download ZIP** or
+`git clone https://github.com/PrimeN/Total-Script-Blocker.git`, then load the folder
+containing `manifest.json` using the same steps above.
 
 For a packaged copy from [GitHub Actions](https://github.com/PrimeN/Total-Script-Blocker/actions/workflows/test.yml),
 extract the downloaded artifact and the extension ZIP inside it, then load the
@@ -166,8 +167,12 @@ python3 scripts/package.py
 Output is written to `dist/`, including `unpacked/` and a SHA-256 checksum file.
 Packaging excludes tests, documentation and repository metadata.
 
-The existing [GitHub Actions workflow](https://github.com/PrimeN/Total-Script-Blocker/actions/workflows/test.yml)
-also runs Chromium integration checks and packages the extension.
+The [extension-check workflow](https://github.com/PrimeN/Total-Script-Blocker/actions/workflows/test.yml)
+also runs Chromium integration checks and packages the extension. Production
+pushes automatically publish downloadable builds; new manifest versions create
+numbered releases with changelog notes.
+
+[Release workflow guide](docs/releasing.md) · [Changelog](CHANGELOG.md)
 
 ## Help and contribute
 
