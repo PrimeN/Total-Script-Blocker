@@ -26,6 +26,7 @@
 
 <p align="center">
   <a href="#features">Features</a> ·
+  <a href="#screenshots">Screenshots</a> ·
   <a href="#install">Install</a> ·
   <a href="docs/usage.md">Usage guide</a> ·
   <a href="docs/privacy-and-permissions.md">Privacy &amp; permissions</a> ·
@@ -42,6 +43,19 @@ restrictions and disable document workers.
 Open the toolbar popup to review discovered domains and apply several permission
 changes together. Keep a permanent rule, grant temporary access, or scope a rule
 to the website you're visiting.
+
+## Screenshots
+
+![Total Script Blocker opening beneath its toolbar icon in a browser window](docs/screenshots/popup-browser.png)
+
+| Protection settings | Domain rules |
+| --- | --- |
+| ![Protection settings and resource controls](docs/screenshots/settings.png) | ![Trusted and blocked domain lists](docs/screenshots/domain-rules.png) |
+
+The extension UI uses representative permission data. Browser framing and the
+example website are illustrative.
+
+[View the full gallery: light/dark popups, pending changes, settings and Chrome Sync →](docs/gallery.md)
 
 ## Features
 
