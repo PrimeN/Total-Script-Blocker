@@ -1,36 +1,63 @@
-{  "manifest_version": 2,
-   "background": {
-       "page": "background.html"
-   },
-   "content_scripts": [
-       {
-           "all_frames": true,
-           "js": [ "common/sjcl.js", "CHANGE__PASSWORD__HERE.js", "common/common.js", "blockStart.js" ],
-           "matches": [ "http://*/*", "https://*/*", "ftp://*/*", "file://*/*" ],
-           "run_at": "document_start"
-       },
-       {
-           "all_frames": true,
-           "js": [ "blockAfter.js" ],
-           "matches": [ "http://*/*", "https://*/*", "ftp://*/*", "file://*/*" ],
-           "run_at": "document_idle"
-       }
-   ],
-   "description": "Total Script Blocker is a smart extension that controls javascript, iframes, and plugins on Google Chrome.",
-   "icons": {
-       "128": "img/icon128.png",
-       "16": "img/icon16.png",
-       "19": "img/forbidden.png",
-       "48": "img/icon48.png"
-   },
-   "name": "Total Script Blocker",
-   "minimum_chrome_version": "70",
-   "options_page": "options.html",
-   "browser_action": {
-       "default_icon": "img/disabled.png",
-       "default_popup": "popup.html",
-       "default_title": "Total Script Blocker"
-   },
-   "permissions": [ "tabs" ],
-   "version": "1.0"
+{
+  "manifest_version": 3,
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "description": "Block scripts, frames, and objects by default. Allow trusted domains permanently or for this browser session.",
+  "icons": {
+    "128": "img/icon128.png",
+    "16": "img/icon16.png",
+    "19": "img/forbidden.png",
+    "48": "img/icon48.png"
+  },
+  "name": "Total Script Blocker",
+  "minimum_chrome_version": "120",
+  "options_page": "options.html",
+  "permissions": [
+    "storage",
+    "declarativeNetRequest",
+    "offscreen",
+    "tabs",
+    "webRequest",
+    "webNavigation",
+    "scripting",
+    "browsingData",
+    "alarms"
+  ],
+  "version": "2.0",
+  "action": {
+    "default_icon": "img/disabled.png",
+    "default_popup": "popup.html",
+    "default_title": "Total Script Blocker"
+  },
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
+  "incognito": "not_allowed",
+  "declarative_net_request": {
+    "rule_resources": [
+      {
+        "id": "baseline",
+        "enabled": true,
+        "path": "rules/baseline.json"
+      }
+    ]
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "js": [
+        "discover.js"
+      ],
+      "run_at": "document_start",
+      "all_frames": true,
+      "match_origin_as_fallback": true
+    }
+  ],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA06xJuyfU3zQYN/W40Z/FMG7jexu8GgIEPEKOq2jE/cia8w+wVSRDac6sM9VtijpBdw8BTybUvg/Eck94O/G+mYFNbgEbITyqWlLGC6nAQcxUxfXwHgG1v6vsRUxanq3w91v+6Mp7HHvgEkHvHXsv/KKirCiFzHC171usA+HLijO0Np8/8R5QQPqYk/cvUS0+/t8lCQzZUy76uD8esY/cA1cHrIuL/A6fzSLIVpeXC1kRcBMru865LC4iODdpBW9PuxqpeBbYxjGzoQCB9eN5R2CtyDFLWuO+HS6VfynvEA2GEo+l3nIXJWWmfFGaI1CBqulNqJ7R4YFjHDupVSNeCQIDAQAB"
 }

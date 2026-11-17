@@ -1,579 +1,153 @@
-document.addEventListener('DOMContentLoaded', function () {
-
-    $(function () {
-        $("#passwordBad").click(function () {
-            openTab(chrome.extension.getURL('options.html'));
-            window.close();
-        });
-    });
-    $(function () {
-        $("#fatalError").click(function () {
-            openTab(chrome.extension.getURL('options.html'));
-            window.close();
-        });
-    });
-    $(function () {
-        $("#extFatalError").click(function () {
-            chrome.extension.getBackgroundPage().clearSettings();
-            updateCurrentOnUnload = false;
-            reloadCurrentAndClose();
-        });
-    });
-
-
-    $("#pop_options").click(function () {
-        openTab(chrome.extension.getURL('options.html'));
-    });
-    $("#pop_close").click(function () {
-        reloadCurrentAndClose();
-    });
-    $("#pop_donate").click(function () {
-        chrome.tabs.create({ url: "https://www.paypal.com/cgi-bin/webscr?cmd=_s-xclick&hosted_button_id=5LWYHKBA25HY2&source=url" });
-    });
-
-    $(function () {
-        $("#allowAllShown").click(function () {
-            allowAllShown();
-        });
-    });
-    $(function () {
-        $("#tempAllowAllShown").click(function () {
-            tempAllowShownBlocked();
-        });
-    });
-    $(function () {
-        $("#blockAllShown").click(function () {
-            blockAllShown();
-        });
-    });
-
-    $(function () {
-        $("#cbMultiSelect").click(function () {
-            bgPage.config.set('multiSelect', this.checked);
-        });
-    });
-
+import {grantTime} from './time.js';
+import {domainPermission,normalizeDomains,websiteState} from './rules.js';
+import {explicitPermission} from './permissions.js';
+import {scorecardURL} from './reputation.js';
+const $=id=>document.getElementById(id);
+let toastTimer;
+let tab,host='',current,sources=[],lastRender='',refreshing=false,filterMode='all',applying=false,initialized=false;
+const selected=new Set(),drafts=new Map(),ratings=new Map(),pending=new Set();
+const labels={blocked:'Restricted',allowed:'Trusted',temporary:'Session grant',paused:'Paused','same-origin':'Origin policy'};
+const manageable=domain=>{try{return normalizeDomains([domain])[0]===domain;}catch{return false;}};
+function notify(text,error=false){clearTimeout(toastTimer);$('status').textContent=text;$('status').dataset.error=String(error);if(text&&!error)toastTimer=setTimeout(()=>{$('status').textContent='';},5000);}
+async function send(message){
+  const result=await chrome.runtime.sendMessage({...message,tabId:tab?.id});
+  if(result?.error)throw new Error(result.error);
+  if(!result)throw new Error('The extension did not respond.');
+  return result.data;
+}
+function showState(state){
+  current=websiteState(state,host);
+  $('undo').disabled=!state.undoCount;
+  $('pause').textContent=state.paused?'Resume':'Pause';
+  $('pause').setAttribute('aria-label',state.paused?'Resume protection':'Pause protection for this browser session');
+  $('protection').textContent=state.paused?'Protection paused':'Protection on';
+  $('protection').className='pill '+(state.paused?'paused':'allowed');
+  const mode={whitelist:'Trust required','same-origin':'Same-origin policy',blacklist:'Blocklist policy'}[state.mode];
+  $('summary').textContent=state.paused?'Paused across tabs until you resume or this browser session ends.':`${mode} · ${state.sites?.[host]?'Website overrides active':'Global rules'}`;
+  if(!initialized){$('reloadToggle').checked=state.reload;initialized=true;}
+}
+async function refresh(force=false){
+  if(refreshing||!tab||applying)return;
+  refreshing=true;
+  try{
+    const latest=await chrome.tabs.get(tab.id);
+    let nextHost='';try{const url=new URL(latest.url);if(['http:','https:'].includes(url.protocol))nextHost=url.hostname;}catch{}
+    if(host && host!==nextHost){drafts.clear();selected.clear();notify('Website changed. Pending edits were discarded.');}
+    host=nextHost;
+    $('site').textContent=host||'Browser page';
+    for(const id of ['allow','temporary','block','default','clear'])$(id).disabled=!host||!manageable(host);
+    const data=await send({type:'sources',scan:force||!initialized});showState(data.state);sources=data.sources;
+    for(const domain of selected)if(!sources.some(s=>s.domain===domain))selected.delete(domain);
+    render(force);
+  }catch(error){notify(error.message,true);}
+  finally{refreshing=false;}
+}
+function visibleSources(){
+  const search=$('filter').value.trim().toLowerCase();
+  return sources.filter(source=>{
+    const permission=domainPermission(source.domain,current);
+    return source.domain.includes(search)&&(filterMode==='all'||(filterMode==='trusted'?['allowed','temporary'].includes(permission):permission===filterMode));
+  }).sort((a,b)=>Number(b.domain===host)-Number(a.domain===host)||Number(domainPermission(b.domain,current)==='blocked')-Number(domainPermission(a.domain,current)==='blocked')||a.domain.localeCompare(b.domain));
+}
+function updateControls(){
+  const visible=visibleSources().filter(s=>manageable(s.domain));
+  const checked=visible.filter(s=>selected.has(s.domain)).length;
+  $('selectAll').checked=visible.length>0&&checked===visible.length;
+  $('selectAll').indeterminate=checked>0&&checked<visible.length;
+  $('selectAll').disabled=!visible.length;
+  $('selectedCount').textContent=selected.size?`${selected.size} selected`:'Select visible';
+  for(const id of ['bulkAllow','bulkTemp','bulkBlock'])$(id).disabled=!selected.size||applying;
+  $('pendingCount').textContent=drafts.size?`${drafts.size} pending ${drafts.size===1?'change':'changes'}`:'No pending changes';
+  $('pendingHint').textContent=drafts.size?'Review your choices before applying.':'Choose permissions, then apply once.';
+  $('apply').textContent=applying?'Applying…':'Apply changes';
+  $('apply').disabled=!drafts.size||applying;$('discard').disabled=!drafts.size||applying;
+}
+function stage(domain,mode){
+  if(!manageable(domain)){notify('This address cannot be used in a domain rule.',true);return;}
+  drafts.set(domain,mode);notify('Changes staged. Apply when you are ready.');render(true);
+}
+function render(force=false){
+  if(!current)return;
+  const visible=visibleSources();
+  const signature=JSON.stringify([visible,current,[...ratings],[...drafts],filterMode]);
+  updateControls();
+  if(!force&&signature===lastRender)return;
+  if(!force&&$('sources').contains(document.activeElement))return;
+  lastRender=signature;
+  const focus=document.activeElement?.dataset.key;
+  const opened=new Set([...$('sources').querySelectorAll('details[open]')].map(el=>el.dataset.domain));
+  const scroll=document.querySelector('.popup-main').scrollTop;
+  $('sources').replaceChildren();$('count').textContent=`${sources.length}${sources.length>=300?' · limit reached':''}`;
+  $('restrictedCount').textContent=sources.filter(s=>domainPermission(s.domain,current)==='blocked').length;
+  $('trustedCount').textContent=sources.filter(s=>['allowed','temporary'].includes(domainPermission(s.domain,current))).length;
+  $('sessionCount').textContent=current.temporary.length;
+  for(const source of visible){
+    const permission=domainPermission(source.domain,current),canManage=manageable(source.domain);
+    const row=document.createElement('article');row.className='source'+(drafts.has(source.domain)?' pending':'');
+    const top=document.createElement('div');top.className='source-top';
+    const label=document.createElement('label');label.className='source-name';
+    const checkbox=document.createElement('input');checkbox.type='checkbox';checkbox.checked=selected.has(source.domain);checkbox.disabled=!canManage;
+    checkbox.addEventListener('change',()=>{if(checkbox.checked)selected.add(source.domain);else selected.delete(source.domain);updateControls();});
+    const name=document.createElement('span');name.textContent=source.domain;label.append(checkbox,name);top.append(label);
+    const badge=document.createElement('span');badge.className='pill '+permission;badge.textContent=labels[permission];top.append(badge);row.append(top);
+    const controls=document.createElement('div');controls.className='source-controls';
+    const select=document.createElement('select');select.setAttribute('aria-label',`Permission for ${source.domain}`);select.dataset.key=source.domain;
+    for(const [value,title] of [['default','Inherit policy'],['allow','Always trust'],['temporary','Trust for session'],['block','Block domain']]){const option=document.createElement('option');option.value=value;option.textContent=title;select.append(option);}
+    select.value=drafts.get(source.domain)||explicitPermission(source.domain,current);select.disabled=!canManage||applying;
+    select.addEventListener('change',()=>stage(source.domain,select.value));controls.append(select);
+    const details=document.createElement('details');details.dataset.domain=source.domain;details.open=opened.has(source.domain);
+    const summary=document.createElement('summary');summary.textContent=drafts.has(source.domain)?'Pending change · details':'Details & reputation';details.append(summary);
+    const detailBody=document.createElement('div');
+    const evidence=document.createElement('p');evidence.className='hint';evidence.textContent=`${current.expiries?.[source.domain]?grantTime(current.expiries[source.domain])+' · ':''}${source.types.join(', ')} · ${source.evidence.map(e=>({page:'declared in page',request:'request observed',completed:'response completed','browser-blocked':'browser blocked','csp-blocked':'CSP blocked'})[e]).join(', ')}`;detailBody.append(evidence);
+    const actions=document.createElement('div');actions.className='actions';
+    if(canManage){
+      const link=document.createElement('a');link.textContent='WOT scorecard';link.href=scorecardURL(source.domain);link.target='_blank';link.rel='noopener noreferrer';actions.append(link);
+      const lookup=document.createElement('button');lookup.textContent=pending.has(source.domain)?'Checking WOT…':'Check WOT';lookup.disabled=pending.has(source.domain);lookup.addEventListener('click',()=>checkRating(source.domain));actions.append(lookup);
+    }
+    detailBody.append(actions);
+    const rating=document.createElement('p');rating.className='rating';rating.textContent=canManage?ratings.get(source.domain)||'WOT: not checked. Lookups send this domain to WOT.':'IPv6 address rules are not supported in this version.';detailBody.append(rating);
+    details.append(detailBody);controls.append(details);row.append(controls);$('sources').append(row);
+  }
+  if(!visible.length){const empty=document.createElement('p');empty.className='empty-state';empty.textContent=sources.length?'No domains match these filters.':'No domains found. Reload a website or rescan to start discovery.';$('sources').append(empty);}
+  if(focus)$('sources').querySelector(`[data-key="${CSS.escape(focus)}"]`)?.focus({preventScroll:true});
+  document.querySelector('.popup-main').scrollTop=scroll;
+  if(current.wot.automatic&&current.wot.configured)for(const source of visible.slice(0,20))if(manageable(source.domain)&&pending.size<3&&!ratings.has(source.domain)&&!pending.has(source.domain))void checkRating(source.domain);
+}
+async function checkRating(domain){
+  if(pending.has(domain))return;
+  pending.add(domain);notify('');render(true);
+  try{
+    const r=await send({type:'wot-rating',domain});
+    ratings.set(domain,`WOT: ${r.status.replaceAll('_',' ')} · safety ${r.score===null?'unrated':r.score+'/100'} · confidence ${r.confidence===null?'unknown':r.confidence+'/100'}${r.childScore===null?'':' · child safety '+r.childScore+'/100'}${r.categories.length?' · '+r.categories.map(c=>c.name).join(', '):''}`);
+  }catch(error){ratings.set(domain,'WOT unavailable: '+error.message);}
+  finally{pending.delete(domain);render(true);}
+}
+async function run(message){
+  try{showState(await send(message));notify('Saved. Reload other affected tabs to apply document policies.');await refresh(true);}
+  catch(error){notify(error.message,true);}
+}
+$('apply').addEventListener('click',async()=>{
+  if(applying||!drafts.size)return;applying=true;updateControls();
+  try{
+    showState(await send({type:'permissions-batch',scope:$('scope').value,website:host,duration:Number($('duration').value),changes:[...drafts].map(([domain,mode])=>({domain,mode})),reload:$('reloadToggle').checked}));
+    drafts.clear();notify('Saved. Other open tabs may need a reload.');
+  }catch(error){notify(error.message,true);}
+  finally{applying=false;await refresh(true);}
 });
-
-function openTab(url) {
-    chrome.tabs.create({ url: url });
-    window.close();
-}
-
-
-var currTabId = null;
-var currTabIndex = null;
-var currTabUrl = null;
-
-var numActionShown = 0;
-const MAX_NUM_ACTION = 150;
-
-var fatalErrorButton = document.getElementById("fatalError");
-var extFatalErrorButton = document.getElementById("extFatalError");
-var passwordBadButton = document.getElementById("passwordBad");
-var spacerTopDiv = document.getElementById("wrapperSpacerTop");
-var spacerBottomDiv = document.getElementById("wrapperSpacerBottom");
-
-var multiSelectCB = document.getElementById("cbMultiSelect");
-var multiSelectDiv = document.getElementById("divMultiSelect");
-
-var allowAllShownButton = document.getElementById("allowAllShown");
-var blockAllShownButton = document.getElementById("blockAllShown");
-var tempAllowShownBlockedButton = document.getElementById("tempAllowAllShown");
-var globalAllowTempButton = document.getElementById("globalAllowTemp");
-var revokeAllTempButton = document.getElementById("revokeAllTemp");
-
-$("button[name=actionButton]").button();
-
-var encounteredError = false;
-const bgPage = chrome.extension.getBackgroundPage();
-
-var passwordStatus = isPasswordGood();
-if (passwordStatus !== PASSWORD_STATUS.okay) {
-    switch (passwordStatus) {
-        case PASSWORD_STATUS.tooShort:
-            $("span[name=pwdProbDescrip]").text("Problem: Password is too short, must be at least " + MIN_PASSWORD_LENGTH + " characters.");
-            break;
-        case PASSWORD_STATUS.tooLong:
-            $("span[name=pwdProbDescrip]").text("Problem: Password is too long, must be no greater than " + MAX_PASSWORD_LENGTH + " characters.");
-            break;
-        case PASSWORD_STATUS.empty:
-            $("span[name=pwdProbDescrip]").text("Problem: Password is empty.");
-            break;
-        case PASSWORD_STATUS.invalidChars:
-            $("span[name=pwdProbDescrip]").text("Problem: Password contains invalid characters.");
-            break;
-        case PASSWORD_STATUS.okay:
-            break;
-        case PASSWORD_STATUS.undefined:
-            $("span[name=pwdProbDescrip]").text("Problem: Your password file is missing/invalid characters are present/the syntax is incorrect.");
-            break;
-        default:
-            $("span[name=pwdProbDescrip]").text("Problem: Unknown problem with password/file.");
-            break;
-    }
-    passwordBadButton.style.display = "block";
-}
-else if (bgPage.extFatalError) {
-    chrome.tabs.getSelected(null,
-        function (tab) {
-            currTabId = tab.id;
-            currTabIndex = tab.index;
-            currTabUrl = tab.url;
-        }
-    );
-    extFatalErrorButton.style.display = "block";
-    spacerTopDiv.style.display = "block";
-}
-else {
-    chrome.extension.onMessage.addListener(function (msg, src, send) {
-        if (msg.type === "get sources response") {
-            //chrome.extension.getBackgroundPage().console.log("sources from iframe");
-            showLastBlocked(msg);
-            send({});
-        }
-        else {
-            send({});
-        }
-    });
-
-    chrome.tabs.getSelected(null,
-        function (tab) {
-            currTabId = tab.id;
-            currTabIndex = tab.index;
-            currTabUrl = tab.url;
-            chrome.tabs.sendMessage(tab.id, { type: "get sources" }, showLastBlocked);
-
-        }
-    );
-}
-
-
-function chunkUrlForDisplay(currBlockedURL) {
-    const maxLines = 5;
-    var urlChunks = currBlockedURL.chunk(30);
-    var theMessage = "";
-
-    if (urlChunks) {
-        for (var j = 0; j < maxLines && j < urlChunks.length; j++) {
-            theMessage += (urlChunks[j] + "\n");
-        }
-
-        if (urlChunks.length > maxLines) {
-            var lastChunk = urlChunks[maxLines].chunk(15);
-            theMessage += (lastChunk[0] + "......\n");
-        }
-    }
-
-    return theMessage;
-}
-
-const URL_LIST_TYPE = {
-    "allowed": 0,
-    "tempAllowed": 1,
-    "blocked": 2,
-    "untrusted": 3
-}
-
-function limitUrlLength(currBlockedURL) {
-    return (currBlockedURL.length >= 300 ? currBlockedURL.substring(0, 299) + "......<<CUT OFF, TOO LONG>>" : currBlockedURL);
-}
-
-/*
- In case we have duplicates from iframes or unknown TLD's. Uses linear search to go through the already shown elements.
- Probably best to not try a binary-like search on the shown elements because of the small numbers (~less than 10).
- */
-function fixAlreadyShown(currBlockedURL) {
-    var isAlreadyShown = false;
-    var docEls = document.getElementsByName("urlActionForm");
-    for (var i = 0; i < docEls.length; i++) {
-        var currDataUrl = docEls[i].childNodes[1].childNodes[0].getAttribute("data-url");
-        //console.log("outside  " + currBlockedURL + "    " + currDataUrl);
-        if (patternMatches(currBlockedURL, currDataUrl)) {
-            //console.log("matches    " + currBlockedURL  + "    " + currDataUrl);
-            if (currBlockedURL.length < currDataUrl.length) {
-                var currUrlTitleEl = docEls[i].childNodes[0];	//.childNodes[0];
-                var currRBs = docEls[i].childNodes[1].childNodes;	// Goes in multiples of 2
-
-                currUrlTitleEl.innerText = limitUrlLength(currBlockedURL);
-
-                /*   var RatedUrl = document.createElement("a");
-                 RatedUrl.className = "RatedUrl";
-                 RatedUrl.href = "#";
-                 RatedUrl.innerText = "(Rating)";
-                 RatedUrl.setAttribute("data-url", currBlockedURL);
-                 RatedUrl.onclick = openRatedUrl;
-                 currUrlTitleEl.appendChild(RatedUrl);
-
-                 var infoUrl = document.createElement("a");
-                 infoUrl.className = "infoUrl";
-                 infoUrl.href = "#";
-                 infoUrl.innerText = "(?)";
-                 infoUrl.setAttribute("data-url", currBlockedURL);
-                 infoUrl.onclick = openInfoUrl;
-                 currUrlTitleEl.appendChild(infoUrl);   */
-
-
-                currRBs[0].setAttribute("data-url", currBlockedURL);	// Allow
-                currRBs[2].setAttribute("data-url", currBlockedURL);	// Block This Site
-                currRBs[4].setAttribute("data-url", currBlockedURL);	// Temp
-
-                if (currRBs[6])
-                    currRBs[6].setAttribute("data-url", currBlockedURL);	// In case we have an extra button
-            }
-
-            isAlreadyShown = true;
-        }
-    }
-    return isAlreadyShown;
-}
-
-function addButtonsFromUrlList(urlList, urlListType, topDomain, topDomainIsWhitelisted) {
-    if (urlList) {
-        for (var i = 0; i < urlList.length; i++) {
-            // Note: It is expected and important that the urlList is already encoded with encodeURI,
-            // which it should be if urlList was filled using only returned values from getPrimaryDomain(...)
-            // Otherwise, we will have unexpected formatting when rendering the text if there are malformed strings.
-            var currBlockedURL = urlList[i];
-
-            if (currBlockedURL) {
-                if (fixAlreadyShown(currBlockedURL))
-                    continue;
-
-                if (numActionShown > MAX_NUM_ACTION) {
-                    var overFlowMsg = document.createElement("div");
-                    overFlowMsg.className = "urlActionForm";
-                    overFlowMsg.setAttribute("name", "urlActionForm");
-                    overFlowMsg.style.padding = "5px 0px 5px 0px";
-                    overFlowMsg.innerText = "Overflow.....too many scripts. At least " + (urlList.length - i) + " more.\nMalicious site?";
-                    spacerBottomDiv.parentNode.insertBefore(overFlowMsg, spacerBottomDiv);
-                    overFlowMsg.style.display = "block";
-                    break;
-                }
-
-                numActionShown++;
-
-                var aForm = document.createElement("div");
-                aForm.className = "urlActionForm";
-                aForm.setAttribute("name", "urlActionForm");
-                var aRadioSetDiv = document.createElement("div");
-                aRadioSetDiv.className = "aRadioSetDiv";
-
-                var divUrl = document.createElement("div");
-                divUrl.className = "urlTitle";
-                divUrl.innerText = limitUrlLength(currBlockedURL);
-
-                /* var RatedUrl = document.createElement("a");
-                 RatedUrl.className = "RatedUrl";
-                 RatedUrl.href = "#";
-                 RatedUrl.innerText = "(Rating)";
-                 RatedUrl.setAttribute("data-url", currBlockedURL);
-                 RatedUrl.onclick = openRatedUrl;
-                 divUrl.appendChild(RatedUrl);
-
-                 var infoUrl = document.createElement("a");
-                 infoUrl.className = "infoUrl";
-                 infoUrl.href = "#";
-                 infoUrl.innerText = "(?)";
-                 infoUrl.setAttribute("data-url", currBlockedURL);
-                 infoUrl.onclick = openInfoUrl;
-                 divUrl.appendChild(infoUrl);*/
-
-                aForm.appendChild(divUrl);
-
-
-                var rbGroupName = randomID();
-
-                var rbAlwaysAllow = document.createElement("input");
-                rbAlwaysAllow.type = "radio";
-                rbAlwaysAllow.id = randomID();
-                rbAlwaysAllow.name = rbGroupName;
-                rbAlwaysAllow.setAttribute("data-url", currBlockedURL);
-                rbAlwaysAllow.onclick = addSite;
-                if (urlListType === URL_LIST_TYPE.allowed) rbAlwaysAllow.checked = true;
-                aRadioSetDiv.appendChild(rbAlwaysAllow);
-                var labelAlwaysAllow = document.createElement("label");
-                labelAlwaysAllow.setAttribute("for", rbAlwaysAllow.id);
-                labelAlwaysAllow.innerText = "Allow";
-                labelAlwaysAllow.className = "allowradio";
-                aRadioSetDiv.appendChild(labelAlwaysAllow);
-
-                var rbBlock = document.createElement("input");
-                rbBlock.type = "radio";
-                rbBlock.id = randomID();
-                rbBlock.name = rbGroupName;
-                rbBlock.setAttribute("data-url", currBlockedURL);
-                rbBlock.onclick = removeSite;
-                if ((urlListType === URL_LIST_TYPE.blocked && blocking_mode !== BMODE_TYPES.WHITELIST_ALLOW_TOP_LEVEL)
-                    || (urlListType === URL_LIST_TYPE.untrusted && blocking_mode === BMODE_TYPES.WHITELIST_ALLOW_TOP_LEVEL))
-                    rbBlock.checked = true;
-                aRadioSetDiv.appendChild(rbBlock);
-                var labelBlock = document.createElement("label");
-                labelBlock.setAttribute("for", rbBlock.id);
-                labelBlock.innerText = blocking_mode === BMODE_TYPES.WHITELIST_ALLOW_TOP_LEVEL ? "Block" : "Block";
-                labelBlock.className = "blockradio";
-                aRadioSetDiv.appendChild(labelBlock);
-
-                if (blocking_mode === BMODE_TYPES.WHITELIST_ALLOW_TOP_LEVEL) {
-                    var rbSameSite = document.createElement("input");
-                    rbSameSite.type = "radio";
-                    rbSameSite.id = randomID();
-                    rbSameSite.name = rbGroupName;
-                    rbSameSite.setAttribute("data-url", currBlockedURL);
-                    rbSameSite.onclick = sameSite;
-                    if (urlListType === URL_LIST_TYPE.blocked
-                        || (urlListType === URL_LIST_TYPE.allowed && topDomain === currBlockedURL && !topDomainIsWhitelisted))
-                        rbSameSite.checked = true;
-                    aRadioSetDiv.appendChild(rbSameSite);
-                    var labelSameSite = document.createElement("label");
-                    labelSameSite.setAttribute("for", rbSameSite.id);
-                    labelSameSite.innerText = "Same";
-                    aRadioSetDiv.appendChild(labelSameSite);
-                }
-
-                var rbTempAllow = document.createElement("input");
-                rbTempAllow.type = "radio";
-                rbTempAllow.id = randomID();
-                rbTempAllow.name = rbGroupName;
-                rbTempAllow.setAttribute("data-url", currBlockedURL);
-                rbTempAllow.onclick = tempAllowSite;
-                if (urlListType === URL_LIST_TYPE.tempAllowed) rbTempAllow.checked = true;
-                aRadioSetDiv.appendChild(rbTempAllow);
-                var labelTempAllow = document.createElement("label");
-                labelTempAllow.setAttribute("for", rbTempAllow.id);
-                labelTempAllow.innerText = "Temp";
-                labelTempAllow.className = "tempradio";
-                aRadioSetDiv.appendChild(labelTempAllow);
-
-                $(aRadioSetDiv).buttonset();
-
-                aForm.appendChild(aRadioSetDiv);
-
-
-                var divRated = document.createElement("div");
-                divRated.className = "urlTitle";
-                //divUrl.innerText = limitUrlLength(currBlockedURL);
-
-                var ratedUrl = document.createElement("ratfo");
-                ratedUrl.className = "ratedUrl";
-                ratedUrl.href = "#";
-                ratedUrl.innerText = "Rating";
-                ratedUrl.setAttribute("data-url", currBlockedURL);
-                ratedUrl.onclick = openRatedUrl;
-                divRated.appendChild(ratedUrl);
-
-                var infoUrl = document.createElement("ratfo");
-                infoUrl.className = "infoUrl";
-                infoUrl.href = "#";
-                infoUrl.innerText = "Info";
-                infoUrl.setAttribute("data-url", currBlockedURL);
-                infoUrl.onclick = openInfoUrl;
-                divRated.appendChild(infoUrl);
-
-                aForm.appendChild(divRated);
-
-
-                spacerBottomDiv.parentNode.insertBefore(aForm, spacerBottomDiv);
-                aForm.style.display = "block";
-            }
-        }
-    }
-}
-
-function showLastBlocked(response) {
-    if (response.fatalError) {
-        encounteredError = true;
-
-        var currBlockedURL = encodeURI(response.url ? response.url : "");
-        document.getElementById("fatalErrorUrl").innerText = chunkUrlForDisplay(currBlockedURL);
-        fatalErrorButton.onclick = clearSiteStorageAndClose;
-        fatalErrorButton.style.display = "block";
-        spacerTopDiv.style.display = "block";
-    }
-    
-    spacerBottomDiv.style.display = "block";
-
-    // Toggling on/off
-    if (response.globalAllowAll) {
-
-        revokeAllTempButton.style.margin = "30px auto 10px auto";
-        revokeAllTempButton.setAttribute("data-newState", "false");
-        revokeAllTempButton.style.display = "block";
-        revokeAllTempButton.onclick = toggleOnOff;
-    }
-    else {
-        multiSelectDiv.style.display = "block";
-        multiSelectCB.checked = bgPage.config.get('multiSelect');
-        spacerTopDiv.style.display = "block";
-
-        if (bgPage.tempAllowList.length > 0) {
-            revokeAllTempButton.innerText = "Revoke Temporary From\n" + bgPage.tempAllowList.length + " Site(s)\nin All Pages";
-            revokeAllTempButton.style.padding = "7px 2px 7px 2px";
-            revokeAllTempButton.setAttribute("data-newState", "false");
-            revokeAllTempButton.style.display = "block";
-            revokeAllTempButton.onclick = toggleOnOff;
-            revokeAllTempButton.id = "revokeall";
-        }
-
-        spacerBottomDiv.style.display = "block";
-        if (response.pageSourcesForbidden && response.pageSourcesForbidden.length > 0) {
-            allowAllShownButton.style.display = "block";
-            tempAllowShownBlockedButton.style.display = "block";
-        }
-
-        if (response.pageSourcesAllowed && response.pageSourcesAllowed.length > 0) {
-            blockAllShownButton.style.display = "block";
-        }
-
-        globalAllowTempButton.setAttribute("data-newState", "true");
-        globalAllowTempButton.style.display = "block";
-        globalAllowTempButton.onclick = toggleOnOff;
-
-        addButtonsFromUrlList(response.pageSourcesTempAllowed, URL_LIST_TYPE.tempAllowed, response.topDomain, response.topDomainIsWhitelisted);
-        addButtonsFromUrlList(response.pageSourcesAllowed, URL_LIST_TYPE.allowed, response.topDomain, response.topDomainIsWhitelisted);
-
-        // Untrust needs to be before blocked in case of iframes
-        addButtonsFromUrlList(response.pageSourcesUntrusted, URL_LIST_TYPE.untrusted, response.topDomain, response.topDomainIsWhitelisted);
-        addButtonsFromUrlList(response.pageSourcesForbidden, URL_LIST_TYPE.blocked, response.topDomain, response.topDomainIsWhitelisted);
-
-    }
-
-    // Workaround for Google Chrome on netbooks with screen heights of less than 700px where the
-    // drop down menu is cut off by the screen.
-    if (screen.height < 700 && document.documentElement.clientHeight > 500) {
-        document.getElementById("spaceFiller").style.display = "block";
-    }
-}
-
-var updateCurrentOnUnload = false;
-
-function doTasks() {
-    if (updateCurrentOnUnload)
-        bgPage.updateAllTabs(false);
-}
-
-function openInfoUrl() {
-    var url = this.getAttribute("data-url");
-    chrome.tabs.create({ "url": "http://www.google.com/safebrowsing/diagnostic?site=" + encodeURIComponent(url), "index": currTabIndex });
-    window.close();
-}
-
-function openRatedUrl() {
-    var url = this.getAttribute("data-url");
-    chrome.tabs.create({ "url": "http://www.mywot.com/en/scorecard/" + encodeURIComponent(url), "index": currTabIndex });
-    window.close();
-}
-
-function tempAllowSite() {
-    var urls = new Array();
-    urls.push(this.getAttribute("data-url"));
-    bgPage.tempPermitUrl(urls);
-
-    if (multiSelectCB.checked)
-        updateCurrentOnUnload = true;
-    else {
-        bgPage.updateAllTabs(false);
-        reloadCurrentAndClose();
-        //window.close();
-    }
-}
-
-function removeSite() {
-    var urls = new Array();
-    urls.push(this.getAttribute("data-url"));
-    bgPage.revokeUrl(urls);
-
-    if (multiSelectCB.checked)
-        updateCurrentOnUnload = true;
-    else {
-        bgPage.updateAllTabs(false);
-        window.close();
-    }
-}
-
-function addSite() {
-    var urls = new Array();
-    urls.push(this.getAttribute("data-url"));
-    bgPage.permitUrl(urls);
-
-    if (multiSelectCB.checked)
-        updateCurrentOnUnload = true;
-    else {
-        bgPage.updateAllTabs(false);
-        reloadCurrentAndClose();
-        //window.close();
-    }
-}
-
-function sameSite() {
-    var urls = new Array();
-    urls.push(this.getAttribute("data-url"));
-    bgPage.sameSiteUrl(urls);
-
-    if (multiSelectCB.checked)
-        updateCurrentOnUnload = true;
-    else {
-        bgPage.updateAllTabs(false);
-        reloadCurrentAndClose();
-        //window.close();
-    }
-}
-
-function blockAllShown() {
-    var urls = new Array();
-    var docEls = document.getElementsByName("urlActionForm");
-    for (var i = 0; i < docEls.length; i++) {
-        urls.push(docEls[i].childNodes[1].childNodes[0].getAttribute("data-url"));
-    }
-    bgPage.revokeUrl(urls);
-
-    updateCurrentOnUnload = false;
-    bgPage.updateAllTabs(false);
-    window.close();
-}
-
-function allowAllShown() {
-    var urls = new Array();
-    var docEls = document.getElementsByName("urlActionForm");
-    for (var i = 0; i < docEls.length; i++) {
-        urls.push(docEls[i].childNodes[1].childNodes[0].getAttribute("data-url"));
-    }
-    bgPage.permitUrl(urls);
-
-    updateCurrentOnUnload = false;
-    bgPage.updateAllTabs(false);
-    window.close();
-}
-
-function tempAllowShownBlocked() {
-    var urls = new Array();
-    var docEls = document.getElementsByName("urlActionForm");
-    for (var i = 0; i < docEls.length; i++) {
-        // The second childNodes goes in multiples of 2 because jQuery renders an element over the radio boxes
-        if (!docEls[i].childNodes[1].childNodes[0].checked)		// Looks at the "Allow" button
-            urls.push(docEls[i].childNodes[1].childNodes[0].getAttribute("data-url"));
-    }
-    bgPage.tempPermitUrl(urls);
-
-    updateCurrentOnUnload = false;
-    bgPage.updateAllTabs(false);
-    window.close();
-}
-
-
-function toggleOnOff() {
-    var newState = this.getAttribute("data-newState") === "true" ? true : false;
-    bgPage.toggleOnOff(newState);
-    bgPage.updateAllTabs(false);
-    window.close();
-}
-
-function clearSiteStorageAndClose() {
-    bgPage.resetSiteStorage(currTabId);
-    window.close();
-}
-
-function reloadCurrentAndClose() {
-    chrome.tabs.update(currTabId, { "url": currTabUrl });
-    window.close();
-}
+$('discard').addEventListener('click',()=>{drafts.clear();notify('Pending changes discarded.');render(true);});
+for(const mode of ['allow','temporary','block','default'])$(mode).addEventListener('click',()=>stage(host,mode));
+for(const [id,mode]of [['bulkAllow','allow'],['bulkTemp','temporary'],['bulkBlock','block']])$(id).addEventListener('click',()=>{for(const domain of selected)drafts.set(domain,mode);notify('Selected permissions staged. Apply when ready.');render(true);});
+$('selectAll').addEventListener('change',()=>{for(const source of visibleSources().filter(s=>manageable(s.domain)))if($('selectAll').checked)selected.add(source.domain);else selected.delete(source.domain);render(true);});
+$('filter').addEventListener('input',()=>render(true));
+for(const button of document.querySelectorAll('[data-filter]'))button.addEventListener('click',()=>{filterMode=button.dataset.filter;for(const other of document.querySelectorAll('[data-filter]'))other.setAttribute('aria-pressed',String(other===button));render(true);});
+$('customAllow').addEventListener('click',()=>{try{stage(normalizeDomains([$('domain').value])[0],'allow');}catch(error){notify(error.message,true);}});
+$('customTemp').addEventListener('click',()=>{try{stage(normalizeDomains([$('domain').value])[0],'temporary');}catch(error){notify(error.message,true);}});
+$('pause').addEventListener('click',()=>run({type:'pause'}));
+$('revoke').addEventListener('click',()=>run({type:'revoke-temporary'}));
+$('options').addEventListener('click',()=>chrome.runtime.openOptionsPage());
+$('refresh').addEventListener('click',()=>refresh(true));
+$('clear').addEventListener('click',()=>{if(confirm(`Clear local/session storage, IndexedDB, cached app data and service workers for ${host}? Cookies are retained. This cannot be undone.`))void run({type:'clear-site-data'});});
+$('undo').addEventListener('click',()=>run({type:'undo'}));
+$('scope').addEventListener('change',()=>{drafts.clear();void refresh(true);});
+try{[tab]=await chrome.tabs.query({active:true,currentWindow:true});await refresh(true);}catch(error){notify(error.message,true);}
+setInterval(()=>void refresh(),2000);
